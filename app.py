@@ -1,292 +1,258 @@
 """
-╔══════════════════════════════════════════════════════╗
-║           PDF Toolkit Pro  ·  app.py                 ║
-║   A complete, single-file Streamlit PDF utility app  ║
-╚══════════════════════════════════════════════════════╝
-
-Features
-  Core  → Merge · Split · Remove Pages · Extract Pages · Reorder Pages · Images→PDF
-  Extra → Optimize · Compress · Repair · OCR
+PDF Toolkit Pro — clean, simple UI redesign
 """
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Standard-library imports
-# ─────────────────────────────────────────────────────────────────────────────
 import io
 import traceback
 import zipfile
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Third-party imports
-# ─────────────────────────────────────────────────────────────────────────────
 import streamlit as st
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  PAGE CONFIG  (must be the very first Streamlit call)
-# ═════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="PDF Toolkit Pro",
-    page_icon="⬡",
+    page_title="PDF Toolkit",
+    page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  CUSTOM CSS
-# ═════════════════════════════════════════════════════════════════════════════
 CUSTOM_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 
 :root {
-    --bg:         #0b0d12;
-    --surface:    #111318;
-    --surface2:   #191c25;
-    --border:     #22263a;
-    --accent:     #ff6b35;
-    --accent2:    #ffb347;
-    --accent-dim: rgba(255,107,53,0.10);
-    --text:       #dde1f0;
-    --muted:      #6a728e;
-    --success:    #3ddc97;
-    --warning:    #ffc947;
-    --danger:     #ff4d6a;
-    --info:       #6495ed;
-    --r:          12px;
-    --r-sm:       8px;
+    --bg:       #f8f9fa;
+    --white:    #ffffff;
+    --border:   #e2e5ea;
+    --text:     #1a1d23;
+    --muted:    #6b7280;
+    --accent:   #2563eb;
+    --accent-l: #eff6ff;
+    --success:  #16a34a;
+    --warning:  #d97706;
+    --danger:   #dc2626;
+    --r:        8px;
 }
 
-/* ── Base ─────────────────────────────────────────────────────────────── */
 html, body, [data-testid="stAppViewContainer"] {
     background: var(--bg) !important;
-    font-family: 'DM Sans', sans-serif;
-    color: var(--text);
+    font-family: 'Inter', sans-serif !important;
+    color: var(--text) !important;
 }
+
 #MainMenu, footer, [data-testid="stHeader"], [data-testid="stDecoration"] {
     display: none !important;
 }
 
-/* ── Sidebar ──────────────────────────────────────────────────────────── */
+/* ── Sidebar ── */
 [data-testid="stSidebar"] {
-    background: var(--surface) !important;
+    background: var(--white) !important;
     border-right: 1px solid var(--border) !important;
 }
 [data-testid="stSidebar"] > div:first-child { padding-top: 0 !important; }
 
-.sb-brand {
-    background: linear-gradient(135deg, #ff6b35 0%, #ffb347 100%);
-    padding: 1.5rem 1.4rem 1.1rem;
-    margin-bottom: 1rem;
+.sb-logo {
+    padding: 1.4rem 1.2rem 1rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0.5rem;
 }
-.sb-brand h1 {
-    font-family: 'Syne', sans-serif;
-    font-size: 1.25rem;
-    font-weight: 800;
-    color: #fff;
-    margin: 0 0 0.2rem;
-    letter-spacing: -0.3px;
+.sb-logo h1 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 0.15rem;
 }
-.sb-brand small {
-    font-size: 0.68rem;
-    color: rgba(255,255,255,0.75);
-    letter-spacing: 1px;
-    text-transform: uppercase;
+.sb-logo span {
+    font-size: 0.72rem;
+    color: var(--muted);
 }
 
-.nav-section {
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 1.8px;
+.nav-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 1.2px;
     text-transform: uppercase;
     color: var(--muted);
-    padding: 0.75rem 1.2rem 0.25rem;
+    padding: 0.8rem 1.2rem 0.3rem;
 }
 
-/* Radio → styled nav links */
 [data-testid="stSidebar"] .stRadio > div { gap: 0 !important; }
 [data-testid="stSidebar"] .stRadio label {
-    font-size: 0.86rem !important;
+    font-size: 0.84rem !important;
     color: var(--muted) !important;
-    padding: 0.5rem 1.2rem !important;
-    border-left: 3px solid transparent;
+    padding: 0.45rem 1.2rem !important;
     border-radius: 0 !important;
-    transition: all 0.15s;
     cursor: pointer;
+    transition: background 0.1s, color 0.1s;
 }
 [data-testid="stSidebar"] .stRadio label:hover {
+    background: var(--bg) !important;
     color: var(--text) !important;
-    background: var(--surface2) !important;
 }
 [data-testid="stSidebar"] .stRadio label[data-checked="true"],
 [data-testid="stSidebar"] .stRadio [aria-checked="true"] + label {
+    background: var(--accent-l) !important;
     color: var(--accent) !important;
-    background: var(--accent-dim) !important;
-    border-left-color: var(--accent) !important;
     font-weight: 500 !important;
+    border-left: 2px solid var(--accent) !important;
 }
 [data-testid="stSidebar"] .stRadio [type="radio"] { display: none !important; }
-[data-testid="stSidebar"] * { color: var(--muted); }
 
-/* ── Main layout ──────────────────────────────────────────────────────── */
+/* ── Main ── */
 [data-testid="stMainBlockContainer"] {
-    padding: 2rem 2.5rem 3rem !important;
-    max-width: 1000px;
+    padding: 2rem 2.5rem !important;
+    max-width: 900px;
 }
 
-/* ── Page header ──────────────────────────────────────────────────────── */
+/* ── Page header ── */
 .ph {
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-    margin-bottom: 1.8rem;
-    padding-bottom: 1.4rem;
+    margin-bottom: 1.6rem;
+    padding-bottom: 1.2rem;
     border-bottom: 1px solid var(--border);
 }
-.ph-icon { font-size: 2rem; line-height: 1; flex-shrink: 0; }
 .ph h2 {
-    font-family: 'Syne', sans-serif;
-    font-size: 1.6rem;
-    font-weight: 700;
+    font-size: 1.4rem;
+    font-weight: 600;
     color: var(--text);
-    margin: 0 0 0.2rem;
-    letter-spacing: -0.4px;
+    margin: 0 0 0.25rem;
 }
-.ph p { font-size: 0.85rem; color: var(--muted); margin: 0; line-height: 1.55; }
+.ph p { font-size: 0.83rem; color: var(--muted); margin: 0; }
 
-/* ── Card ─────────────────────────────────────────────────────────────── */
+/* ── Card ── */
 .card {
-    background: var(--surface);
+    background: var(--white);
     border: 1px solid var(--border);
     border-radius: var(--r);
-    padding: 1.4rem 1.6rem;
+    padding: 1.2rem 1.4rem;
     margin-bottom: 1rem;
 }
 .card-title {
-    font-family: 'Syne', sans-serif;
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 1.6px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 1px;
     text-transform: uppercase;
-    color: var(--accent);
-    margin: 0 0 1rem;
+    color: var(--muted);
+    margin: 0 0 0.9rem;
 }
 
-/* ── Pills ────────────────────────────────────────────────────────────── */
-.pr { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0.7rem 0; }
+/* ── Pills ── */
+.pr { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.6rem 0; }
 .pill {
-    display: inline-flex; align-items: center; gap: 0.3rem;
-    font-size: 0.76rem; font-weight: 500;
-    padding: 0.22rem 0.7rem;
+    font-size: 0.75rem; font-weight: 500;
+    padding: 0.2rem 0.65rem;
     border-radius: 999px;
-    background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
 }
-.pill.a { background: var(--accent-dim); border-color: rgba(255,107,53,.28); color: var(--accent); }
-.pill.s { background: rgba(61,220,151,.09); border-color: rgba(61,220,151,.28); color: var(--success); }
-.pill.w { background: rgba(255,201,71,.08); border-color: rgba(255,201,71,.28); color: var(--warning); }
-.pill.d { background: rgba(255,77,106,.08); border-color: rgba(255,77,106,.28); color: var(--danger); }
+.pill.a { background: var(--accent-l); border-color: #bfdbfe; color: var(--accent); }
+.pill.s { background: #f0fdf4; border-color: #bbf7d0; color: var(--success); }
+.pill.w { background: #fffbeb; border-color: #fde68a; color: var(--warning); }
+.pill.d { background: #fef2f2; border-color: #fecaca; color: var(--danger); }
 
-/* ── Alert ────────────────────────────────────────────────────────────── */
+/* ── Alerts ── */
 .al {
-    display: flex; gap: 0.7rem; align-items: flex-start;
-    padding: 0.8rem 1rem; border-radius: var(--r-sm);
-    font-size: 0.83rem; line-height: 1.55; margin: 0.8rem 0;
+    display: flex; gap: 0.6rem; align-items: flex-start;
+    padding: 0.7rem 0.9rem;
+    border-radius: var(--r);
+    font-size: 0.82rem; line-height: 1.5; margin: 0.7rem 0;
 }
-.al-i { font-size: 0.95rem; flex-shrink: 0; margin-top: 0.05rem; }
-.al.info { background: rgba(100,149,237,.09); border: 1px solid rgba(100,149,237,.25); color: #a0b8ff; }
-.al.warn { background: rgba(255,201,71,.07); border: 1px solid rgba(255,201,71,.25); color: var(--warning); }
-.al.err  { background: rgba(255,77,106,.07);  border: 1px solid rgba(255,77,106,.25); color: var(--danger); }
-.al.ok   { background: rgba(61,220,151,.07);  border: 1px solid rgba(61,220,151,.25); color: var(--success); }
+.al-i { font-size: 0.9rem; flex-shrink: 0; margin-top: 0.05rem; }
+.al.info { background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; }
+.al.warn { background: #fffbeb; border: 1px solid #fde68a; color: var(--warning); }
+.al.err  { background: #fef2f2; border: 1px solid #fecaca; color: var(--danger); }
+.al.ok   { background: #f0fdf4; border: 1px solid #bbf7d0; color: var(--success); }
 
-/* ── File uploader ────────────────────────────────────────────────────── */
+/* ── File uploader ── */
 [data-testid="stFileUploader"] {
-    background: var(--surface2) !important;
-    border: 2px dashed var(--border) !important;
+    background: var(--white) !important;
+    border: 1.5px dashed var(--border) !important;
     border-radius: var(--r) !important;
 }
 [data-testid="stFileUploader"]:hover { border-color: var(--accent) !important; }
-[data-testid="stFileUploader"] label { color: var(--muted) !important; font-size: 0.83rem !important; }
+[data-testid="stFileUploader"] label { color: var(--muted) !important; font-size: 0.82rem !important; }
 
-/* ── Inputs ───────────────────────────────────────────────────────────── */
+/* ── Inputs ── */
 .stTextInput input, .stSelectbox select, .stNumberInput input {
-    background: var(--surface2) !important;
+    background: var(--white) !important;
     border: 1px solid var(--border) !important;
-    border-radius: var(--r-sm) !important;
+    border-radius: var(--r) !important;
     color: var(--text) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.84rem !important;
 }
-.stTextInput input:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 2px var(--accent-dim) !important; }
+.stTextInput input:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px #dbeafe !important; outline: none !important; }
 .stTextInput label, .stSelectbox label, .stNumberInput label, .stSlider label {
-    color: var(--muted) !important; font-size: 0.8rem !important; font-weight: 500 !important;
+    color: var(--text) !important; font-size: 0.8rem !important; font-weight: 500 !important;
 }
 
-/* ── Primary button ───────────────────────────────────────────────────── */
+/* ── Buttons ── */
 .stButton > button {
-    background: linear-gradient(135deg, var(--accent), var(--accent2)) !important;
-    color: #fff !important; border: none !important;
-    border-radius: var(--r-sm) !important;
-    font-family: 'Syne', sans-serif !important;
-    font-weight: 600 !important; font-size: 0.86rem !important;
-    letter-spacing: 0.3px !important;
-    padding: 0.52rem 1.3rem !important;
-    box-shadow: 0 4px 18px rgba(255,107,53,.28) !important;
-    transition: opacity .18s, transform .12s !important;
-}
-.stButton > button:hover  { opacity: .88 !important; transform: translateY(-1px) !important; }
-.stButton > button:active { transform: translateY(0) !important; }
-
-/* ── Download button ──────────────────────────────────────────────────── */
-[data-testid="stDownloadButton"] > button {
-    background: var(--surface2) !important;
-    color: var(--accent) !important;
-    border: 1px solid rgba(255,107,53,.35) !important;
-    border-radius: var(--r-sm) !important;
-    font-family: 'Syne', sans-serif !important;
-    font-weight: 600 !important; font-size: 0.83rem !important;
+    background: var(--accent) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: var(--r) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    font-size: 0.84rem !important;
+    padding: 0.5rem 1.2rem !important;
     box-shadow: none !important;
-    transition: background .15s, border-color .15s !important;
+    transition: opacity 0.15s !important;
+}
+.stButton > button:hover { opacity: 0.88 !important; }
+
+[data-testid="stDownloadButton"] > button {
+    background: var(--white) !important;
+    color: var(--accent) !important;
+    border: 1px solid #bfdbfe !important;
+    border-radius: var(--r) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    font-size: 0.83rem !important;
+    box-shadow: none !important;
 }
 [data-testid="stDownloadButton"] > button:hover {
-    background: var(--accent-dim) !important;
-    border-color: var(--accent) !important;
+    background: var(--accent-l) !important;
     transform: none !important;
 }
 
-/* ── Progress bar ─────────────────────────────────────────────────────── */
+/* ── Progress ── */
 [data-testid="stProgressBar"] > div > div {
-    background: linear-gradient(90deg, var(--accent), var(--accent2)) !important;
+    background: var(--accent) !important;
 }
 
-/* ── Streamlit alert boxes ────────────────────────────────────────────── */
-[data-testid="stAlert"] { border-radius: var(--r-sm) !important; font-size: 0.83rem !important; }
+/* ── Divider ── */
+hr { border-color: var(--border) !important; margin: 1.2rem 0 !important; }
 
-/* ── Divider ──────────────────────────────────────────────────────────── */
-hr { border-color: var(--border) !important; margin: 1.4rem 0 !important; }
-
-/* ── Scrollbar ────────────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
-/* ── Text area (OCR preview) ──────────────────────────────────────────── */
+/* ── Text area ── */
 .stTextArea textarea {
-    background: var(--surface2) !important;
+    background: var(--white) !important;
     border: 1px solid var(--border) !important;
-    border-radius: var(--r-sm) !important;
+    border-radius: var(--r) !important;
     color: var(--text) !important;
-    font-family: 'DM Mono', 'Courier New', monospace !important;
-    font-size: 0.8rem !important;
+    font-family: 'Courier New', monospace !important;
+    font-size: 0.78rem !important;
 }
+
+/* ── Streamlit alerts ── */
+[data-testid="stAlert"] { border-radius: var(--r) !important; font-size: 0.82rem !important; }
+
+/* ── Checkbox ── */
+.stCheckbox label { color: var(--text) !important; font-size: 0.83rem !important; }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 #  HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 
 def fmt_bytes(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
@@ -305,8 +271,8 @@ def size_pills(orig: int, new: int) -> str:
     detail = f"{sign}{pct:.1f}% · {fmt_bytes(abs(delta))} {verb}"
     return (
         f'<div class="pr">'
-        f'<span class="pill">📄 Before: {fmt_bytes(orig)}</span>'
-        f'<span class="pill {cls}">📦 After: {fmt_bytes(new)} · {detail}</span>'
+        f'<span class="pill">Before: {fmt_bytes(orig)}</span>'
+        f'<span class="pill {cls}">After: {fmt_bytes(new)} · {detail}</span>'
         f'</div>'
     )
 
@@ -320,8 +286,7 @@ def show_alert(kind: str, icon: str, html: str) -> None:
 
 def ph(icon: str, title: str, desc: str) -> None:
     st.markdown(
-        f'<div class="ph"><div class="ph-icon">{icon}</div>'
-        f'<div><h2>{title}</h2><p>{desc}</p></div></div>',
+        f'<div class="ph"><h2>{icon} {title}</h2><p>{desc}</p></div>',
         unsafe_allow_html=True,
     )
 
@@ -337,7 +302,6 @@ def card_end() -> None:
 
 
 def pill_row(*pills) -> None:
-    """pills = list of (label, cls) tuples; cls in {a, s, w, d, ''}"""
     inner = "".join(
         f'<span class="pill {cls}">{lbl}</span>' for lbl, cls in pills
     )
@@ -369,10 +333,6 @@ def copy_pages(reader: PdfReader, indices: list) -> bytes:
 
 
 def parse_range(text: str, total: int) -> list:
-    """
-    Convert a 1-based range string like "1, 3-5, 8" into a sorted list
-    of 0-based indices.  Raises ValueError for bad input.
-    """
     out: set = set()
     for part in text.replace(" ", "").split(","):
         if not part:
@@ -402,7 +362,6 @@ def build_zip(files: dict) -> bytes:
 
 
 def images_to_pdf(images: list) -> bytes:
-    """PIL Images → PDF bytes.  Uses img2pdf when available."""
     try:
         import img2pdf
         bufs = []
@@ -419,7 +378,7 @@ def images_to_pdf(images: list) -> bytes:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  SIDEBAR NAV
+#  SIDEBAR
 # ═════════════════════════════════════════════════════════════════════════════
 
 CORE  = ["🔀  Merge PDFs", "✂️  Split PDF", "🗑️  Remove Pages",
@@ -428,20 +387,17 @@ EXTRA = ["⚡  Optimize PDF", "🗜️  Compress PDF", "🔧  Repair PDF"]
 
 with st.sidebar:
     st.markdown(
-        '<div class="sb-brand"><h1>⬡ PDF Toolkit Pro</h1>'
-        '<small>10 tools · one place</small></div>',
+        '<div class="sb-logo">'
+        '<h1>📄 PDF Toolkit</h1>'
+        '<span>9 tools · one place</span>'
+        '</div>',
         unsafe_allow_html=True,
     )
-    st.markdown('<div class="nav-section">Core Tools</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-label">Core Tools</div>', unsafe_allow_html=True)
     tool = st.radio("nav", CORE + EXTRA, label_visibility="collapsed")
-    st.markdown('<div class="nav-section" style="margin-top:0.6rem">Best-Effort Extras</div>',
+    st.markdown('<div class="nav-label" style="margin-top:0.4rem">Extras</div>',
                 unsafe_allow_html=True)
-    st.markdown(
-        '<p style="font-size:0.68rem;color:#2a2f45;padding:1.2rem 1.2rem 0;line-height:1.7">'
-        'pypdf · Pillow · img2pdf<br>pdf2image · pytesseract'
-        '</p>',
-        unsafe_allow_html=True,
-    )
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  TOOL PANELS
@@ -450,14 +406,14 @@ with st.sidebar:
 # ─── 1 · MERGE ───────────────────────────────────────────────────────────────
 if tool == CORE[0]:
     ph("🔀", "Merge PDFs",
-       "Combine multiple PDFs into a single document, in the order you upload them.")
+       "Combine multiple PDFs into one document, in upload order.")
 
     files = st.file_uploader("Upload PDFs (select two or more)",
                              type="pdf", accept_multiple_files=True, key="mu")
     if files:
-        pill_row((f"📁 {len(files)} file(s) selected", "a"))
+        pill_row((f"{len(files)} file(s) selected", "a"))
 
-        card_start("Files to merge — in order")
+        card_start("Files to merge")
         total_pages = 0
         for i, f in enumerate(files, 1):
             try:
@@ -466,25 +422,25 @@ if tool == CORE[0]:
                 total_pages += pc
                 st.markdown(
                     f"`{i}.` **{f.name}** &nbsp; "
-                    f'<span class="pill" style="font-size:.72rem">{pc} pg</span>&nbsp;'
+                    f'<span class="pill" style="font-size:.72rem">{pc} pages</span>&nbsp;'
                     f'<span class="pill" style="font-size:.72rem">{fmt_bytes(f.size)}</span>',
                     unsafe_allow_html=True,
                 )
             except Exception:
                 st.markdown(f"`{i}.` **{f.name}** — ⚠️ unreadable")
-        pill_row((f"✅ {total_pages} pages after merge", "s"))
+        pill_row((f"{total_pages} total pages after merge", "s"))
         card_end()
 
         if len(files) < 2:
             show_alert("warn", "⚠️", "Upload at least 2 PDFs.")
-        elif st.button("Merge PDFs →", key="mb"):
+        elif st.button("Merge PDFs", key="mb"):
             try:
                 w = PdfWriter()
                 for f in files:
                     for pg in make_reader(get_bytes(f)).pages:
                         w.add_page(pg)
                 out = writer_to_bytes(w)
-                st.success(f"✅  {len(files)} files merged → {len(w.pages)} pages.")
+                st.success(f"✅  Merged {len(files)} files → {len(w.pages)} pages.")
                 st.download_button("⬇️  Download merged.pdf",
                                    out, "merged.pdf", "application/pdf", key="md")
             except Exception as e:
@@ -496,14 +452,14 @@ if tool == CORE[0]:
 # ─── 2 · SPLIT ───────────────────────────────────────────────────────────────
 elif tool == CORE[1]:
     ph("✂️", "Split PDF",
-       "Explode a PDF into individual pages (or fixed-size chunks) delivered as a ZIP.")
+       "Split into individual pages or fixed-size chunks, delivered as a ZIP.")
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="su")
     if f:
         data   = get_bytes(f)
         reader = make_reader(data)
         total  = len(reader.pages)
-        pill_row((f"📄 {total} pages", "a"), (fmt_bytes(len(data)), ""))
+        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
         col1, col2 = st.columns(2)
         with col1:
@@ -517,7 +473,7 @@ elif tool == CORE[1]:
                                              min_value=1, max_value=total,
                                              value=min(5, total), key="sc")
 
-        if st.button("Split PDF →", key="sb"):
+        if st.button("Split PDF", key="sb"):
             try:
                 pages_dict: dict = {}
                 if mode == "Every page (individual files)":
@@ -544,23 +500,22 @@ elif tool == CORE[1]:
 # ─── 3 · REMOVE PAGES ────────────────────────────────────────────────────────
 elif tool == CORE[2]:
     ph("🗑️", "Remove Pages",
-       "Delete specific pages. Enter 1-based page numbers or ranges.")
+       "Delete specific pages by number or range.")
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="rpu")
     if f:
         data   = get_bytes(f)
         reader = make_reader(data)
         total  = len(reader.pages)
-        pill_row((f"📄 {total} pages", "a"), (fmt_bytes(len(data)), ""))
+        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
         pages_input = st.text_input("Pages to remove",
                                     placeholder=f"e.g.  2, 5, 7-10  (1 to {total})",
                                     key="rpi")
         show_alert("info", "ℹ️",
-                   f"Comma-separated values and/or ranges, e.g. <code>1, 3-5, 8</code>. "
-                   f"Valid range: 1 to {total}.")
+                   f"Comma-separated page numbers or ranges. Valid: 1–{total}.")
 
-        if pages_input and st.button("Remove Pages →", key="rpb"):
+        if pages_input and st.button("Remove Pages", key="rpb"):
             try:
                 to_remove = set(parse_range(pages_input, total))
                 keep      = [i for i in range(total) if i not in to_remove]
@@ -590,15 +545,15 @@ elif tool == CORE[3]:
         data   = get_bytes(f)
         reader = make_reader(data)
         total  = len(reader.pages)
-        pill_row((f"📄 {total} pages", "a"), (fmt_bytes(len(data)), ""))
+        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
         pages_input = st.text_input("Pages to extract",
                                     placeholder=f"e.g.  1, 3-6, 9  (1 to {total})",
                                     key="epi")
         show_alert("info", "ℹ️",
-                   f"Comma-separated page numbers/ranges. Valid range: 1 to {total}.")
+                   f"Comma-separated page numbers or ranges. Valid: 1–{total}.")
 
-        if pages_input and st.button("Extract Pages →", key="eb"):
+        if pages_input and st.button("Extract Pages", key="eb"):
             try:
                 indices = parse_range(pages_input, total)
                 out     = copy_pages(reader, indices)
@@ -617,14 +572,14 @@ elif tool == CORE[3]:
 # ─── 5 · REORDER PAGES ───────────────────────────────────────────────────────
 elif tool == CORE[4]:
     ph("↕️", "Reorder Pages",
-       "Rearrange all pages of a PDF into any order.")
+       "Rearrange pages into any order.")
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="rou")
     if f:
         data   = get_bytes(f)
         reader = make_reader(data)
         total  = len(reader.pages)
-        pill_row((f"📄 {total} pages", "a"))
+        pill_row((f"{total} pages", "a"))
 
         example = ", ".join(str(i) for i in range(total, 0, -1))
         order_input = st.text_input(
@@ -633,10 +588,9 @@ elif tool == CORE[4]:
             key="roi",
         )
         show_alert("info", "ℹ️",
-                   f"Enter all {total} page numbers separated by commas, in your desired order. "
-                   "Every number must appear exactly once.")
+                   f"Enter all {total} page numbers separated by commas in your desired order.")
 
-        if order_input and st.button("Reorder Pages →", key="rob"):
+        if order_input and st.button("Reorder Pages", key="rob"):
             try:
                 nums = [int(x.strip()) for x in order_input.split(",") if x.strip()]
                 if len(nums) != total:
@@ -665,8 +619,7 @@ elif tool == CORE[4]:
 # ─── 6 · IMAGES → PDF ────────────────────────────────────────────────────────
 elif tool == CORE[5]:
     ph("🖼️", "Images → PDF",
-       "Convert JPG, PNG, TIFF, WebP or BMP images into a single PDF. "
-       "One image per page, in upload order.")
+       "Convert JPG, PNG, TIFF, WebP or BMP images into a single PDF.")
 
     imgs = st.file_uploader(
         "Upload images",
@@ -676,7 +629,7 @@ elif tool == CORE[5]:
     )
 
     if imgs:
-        pill_row((f"🖼️ {len(imgs)} image(s)", "a"))
+        pill_row((f"{len(imgs)} image(s)", "a"))
 
         col_q, col_fit = st.columns(2)
         with col_q:
@@ -686,7 +639,6 @@ elif tool == CORE[5]:
                                ["Match image size", "A4 portrait (white background)"],
                                key="if")
 
-        # Preview grid
         card_start("Preview")
         n_cols = min(len(imgs), 6)
         cols   = st.columns(n_cols)
@@ -706,7 +658,7 @@ elif tool == CORE[5]:
         if bad:
             show_alert("warn", "⚠️", f"Could not open: {', '.join(bad)}")
 
-        if pil_images and st.button("Convert to PDF →", key="i2b"):
+        if pil_images and st.button("Convert to PDF", key="i2b"):
             try:
                 if fit == "A4 portrait (white background)":
                     W, H = 2480, 3508
@@ -719,7 +671,6 @@ elif tool == CORE[5]:
                         fitted.append(canvas)
                     pil_images = fitted
 
-                # Re-encode at chosen quality
                 final = []
                 for img in pil_images:
                     b = io.BytesIO()
@@ -741,19 +692,19 @@ elif tool == EXTRA[0]:
     ph("⚡", "Optimize PDF",
        "Deduplicate objects and compress internal streams to shrink file size.")
     show_alert("warn", "⚠️",
-               "<strong>Best-effort.</strong> Works best on office-generated PDFs with "
-               "shared resources. Already-compressed or image-heavy PDFs may not shrink.")
+               "Best-effort. Works well on office-generated PDFs. "
+               "Already-compressed or image-heavy PDFs may not shrink.")
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="opu")
     if f:
         data   = get_bytes(f)
         reader = make_reader(data)
         total  = len(reader.pages)
-        pill_row((f"📄 {total} pages", "a"), (fmt_bytes(len(data)), ""))
+        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
         compress_streams = st.checkbox("Compress content streams (recommended)", value=True, key="ocs")
 
-        if st.button("Optimize →", key="opb"):
+        if st.button("Optimize", key="opb"):
             try:
                 w = PdfWriter()
                 for page in reader.pages:
@@ -766,7 +717,7 @@ elif tool == EXTRA[0]:
                 if len(out) < len(data):
                     st.success(f"✅  Saved {fmt_bytes(len(data) - len(out))}.")
                 else:
-                    st.info("ℹ️  Already well-optimised; no reduction achieved.")
+                    st.info("ℹ️  Already well-optimised — no reduction achieved.")
                 st.download_button("⬇️  Download optimized.pdf",
                                    out, "optimized.pdf", "application/pdf", key="opd")
             except Exception as e:
@@ -780,18 +731,17 @@ elif tool == EXTRA[1]:
     ph("🗜️", "Compress PDF",
        "Re-compress internal streams to reduce file size.")
     show_alert("warn", "⚠️",
-               "<strong>Best-effort.</strong> This uses stream-level compression only. "
-               "For aggressive image resampling use Ghostscript: "
-               "<code>gs -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -o out.pdf in.pdf</code>")
+               "Best-effort stream-level compression. For aggressive image resampling use "
+               "Ghostscript: <code>gs -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -o out.pdf in.pdf</code>")
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="cpu")
     if f:
         data   = get_bytes(f)
         reader = make_reader(data)
         total  = len(reader.pages)
-        pill_row((f"📄 {total} pages", "a"), (fmt_bytes(len(data)), ""))
+        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
-        if st.button("Compress →", key="cpb"):
+        if st.button("Compress", key="cpb"):
             try:
                 w = PdfWriter()
                 for page in reader.pages:
@@ -815,11 +765,9 @@ elif tool == EXTRA[1]:
 # ─── 9 · REPAIR ──────────────────────────────────────────────────────────────
 elif tool == EXTRA[2]:
     ph("🔧", "Repair PDF",
-       "Try to recover a corrupted PDF by reading it in lenient mode "
-       "and re-serialising it cleanly.")
+       "Try to recover a corrupted PDF by reading it in lenient mode and re-serialising it.")
     show_alert("warn", "⚠️",
-               "<strong>Best-effort.</strong> Fixes minor structural issues "
-               "(truncated xref tables, invalid object refs). "
+               "Best-effort. Fixes minor structural issues (truncated xref tables, invalid refs). "
                "Severely damaged files or those with lost encryption keys cannot be recovered.")
 
     f = st.file_uploader("Upload a damaged PDF", type="pdf", key="rpu2")
@@ -827,7 +775,7 @@ elif tool == EXTRA[2]:
         data = get_bytes(f)
         pill_row((fmt_bytes(len(data)), ""))
 
-        if st.button("Attempt Repair →", key="rpb2"):
+        if st.button("Attempt Repair", key="rpb2"):
             try:
                 reader  = PdfReader(io.BytesIO(data), strict=False)
                 w       = PdfWriter()
@@ -852,6 +800,3 @@ elif tool == EXTRA[2]:
                            "File may be too severely damaged.")
     else:
         show_alert("info", "ℹ️", "Upload a damaged PDF above to get started.")
-
-
-
