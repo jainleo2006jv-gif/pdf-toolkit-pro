@@ -255,11 +255,11 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fmt_bytes(n: int) -> str:
-    for unit in ("B", "KB", "MB", "GB"):
+    for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(n) < 1024:
             return f"{n:.1f} {unit}"
         n /= 1024
-    return f"{n:.2f} GB"
+    return f"{n:.2f} TB"
 
 
 def size_pills(orig: int, new: int) -> str:
@@ -292,13 +292,19 @@ def ph(icon: str, title: str, desc: str) -> None:
 
 
 def card_start(label: str = "") -> None:
-    st.markdown(f'<div class="card">', unsafe_allow_html=True)
-    if label:
-        st.markdown(f'<p class="card-title">{label}</p>', unsafe_allow_html=True)
+    # Use a container to scope the card; the opening div is paired with card_end()
+    # by storing content in session state so both tags emit in one markdown block.
+    if "_card_label" not in st.session_state:
+        st.session_state["_card_label"] = ""
+    st.session_state["_card_label"] = label
+    st.session_state["_card_items"] = []
 
 
 def card_end() -> None:
-    st.markdown("</div>", unsafe_allow_html=True)
+    label = st.session_state.get("_card_label", "")
+    title_html = f'<p class="card-title">{label}</p>' if label else ""
+    # Emit a single markdown block so the div wrapper is preserved by Streamlit
+    st.markdown(f'<div class="card">{title_html}</div>', unsafe_allow_html=True)
 
 
 def pill_row(*pills) -> None:
@@ -394,9 +400,26 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.markdown('<div class="nav-label">Core Tools</div>', unsafe_allow_html=True)
-    tool = st.radio("nav", CORE + EXTRA, label_visibility="collapsed")
+    core_tool = st.radio("core_nav", CORE, label_visibility="collapsed", key="core_nav")
     st.markdown('<div class="nav-label" style="margin-top:0.4rem">Extras</div>',
                 unsafe_allow_html=True)
+    extra_tool = st.radio("extra_nav", EXTRA, label_visibility="collapsed", key="extra_nav")
+
+# Determine the active tool; last-clicked radio wins via session state
+if "active_nav" not in st.session_state:
+    st.session_state["active_nav"] = CORE[0]
+
+_prev_core  = st.session_state.get("_prev_core", CORE[0])
+_prev_extra = st.session_state.get("_prev_extra", EXTRA[0])
+
+if core_tool != _prev_core:
+    st.session_state["active_nav"] = core_tool
+elif extra_tool != _prev_extra:
+    st.session_state["active_nav"] = extra_tool
+
+st.session_state["_prev_core"]  = core_tool
+st.session_state["_prev_extra"] = extra_tool
+tool = st.session_state["active_nav"]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -479,7 +502,7 @@ elif tool == CORE[1]:
                 if mode == "Every page (individual files)":
                     for i in range(total):
                         pages_dict[f"page_{i+1:04d}.pdf"] = copy_pages(reader, [i])
-                else:
+                elif chunk_size is not None:
                     cs   = int(chunk_size)
                     part = 1
                     for start in range(0, total, cs):
@@ -597,8 +620,10 @@ elif tool == CORE[4]:
                     show_alert("err", "❌",
                                f"Got {len(nums)} number(s) but document has {total} pages.")
                 elif sorted(nums) != list(range(1, total + 1)):
+                    from collections import Counter
+                    counts  = Counter(nums)
                     missing = sorted(set(range(1, total + 1)) - set(nums))
-                    dupes   = sorted(set(n for n in nums if nums.count(n) > 1))
+                    dupes   = sorted(n for n, c in counts.items() if c > 1)
                     msg = "Invalid order. "
                     if missing: msg += f"Missing: {missing}. "
                     if dupes:   msg += f"Duplicates: {dupes}."
@@ -675,6 +700,7 @@ elif tool == CORE[5]:
                 for img in pil_images:
                     b = io.BytesIO()
                     img.convert("RGB").save(b, "JPEG", quality=quality)
+                    b.seek(0)
                     final.append(Image.open(b))
 
                 out = images_to_pdf(final)
