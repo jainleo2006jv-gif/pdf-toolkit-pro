@@ -5,10 +5,17 @@ PDF Toolkit Pro — clean, simple UI redesign
 import io
 import traceback
 import zipfile
+from collections import Counter
+from typing import Optional
 
 import streamlit as st
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
+from pypdf.errors import PdfReadError, PdfStreamError
+
+# ── Constants ────────────────────────────────────────────────────────────────
+MAX_FILE_MB    = 200
+MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024
 
 st.set_page_config(
     page_title="PDF Toolkit",
@@ -321,8 +328,48 @@ def get_bytes(uf) -> bytes:
     return uf.read()
 
 
+def check_file_size(data: bytes, label: str = "File") -> None:
+    """Raise ValueError if data exceeds the per-file cap."""
+    if len(data) > MAX_FILE_BYTES:
+        raise ValueError(
+            f"{label} is {fmt_bytes(len(data))}, which exceeds the "
+            f"{MAX_FILE_MB} MB limit."
+        )
+
+
+@st.cache_data(show_spinner=False)
+def cached_pdf_info(data: bytes) -> dict:
+    """Cache page count and encryption status so re-uploads don't re-parse."""
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        encrypted = reader.is_encrypted
+        if encrypted:
+            return {"pages": 0, "encrypted": True, "error": None}
+        return {"pages": len(reader.pages), "encrypted": False, "error": None}
+    except (PdfReadError, PdfStreamError) as e:
+        return {"pages": 0, "encrypted": False, "error": str(e)}
+    except Exception as e:
+        return {"pages": 0, "encrypted": False, "error": f"Unexpected error: {e}"}
+
+
 def make_reader(data: bytes) -> PdfReader:
-    return PdfReader(io.BytesIO(data))
+    try:
+        return PdfReader(io.BytesIO(data))
+    except (PdfReadError, PdfStreamError) as e:
+        raise ValueError(f"Could not read PDF: {e}") from e
+
+
+def validate_pdf(data: bytes, label: str = "File") -> PdfReader:
+    """Size-check, encryption-check, and parse — raises ValueError on any failure."""
+    check_file_size(data, label)
+    info = cached_pdf_info(data)
+    if info["error"]:
+        raise ValueError(f"Invalid PDF — {info['error']}")
+    if info["encrypted"]:
+        raise ValueError(
+            "This PDF is password-protected. Remove the password before uploading."
+        )
+    return make_reader(data)
 
 
 def writer_to_bytes(w: PdfWriter) -> bytes:
@@ -344,8 +391,10 @@ def parse_range(text: str, total: int) -> list:
         if not part:
             continue
         if "-" in part:
-            a, b = part.split("-", 1)
-            lo, hi = int(a), int(b)
+            parts = part.split("-", 1)
+            if not parts[0] or not parts[1]:
+                raise ValueError(f"Invalid range '{part}' — use format start-end.")
+            lo, hi = int(parts[0]), int(parts[1])
             if lo < 1 or hi > total or lo > hi:
                 raise ValueError(f"Range '{part}' is out of bounds (1–{total}).")
             out.update(range(lo - 1, hi))
@@ -378,6 +427,8 @@ def images_to_pdf(images: list) -> bytes:
         return img2pdf.convert(bufs)
     except ImportError:
         rgb = [img.convert("RGB") for img in images]
+        if not rgb:
+            raise ValueError("No valid images to convert.")
         buf = io.BytesIO()
         rgb[0].save(buf, format="PDF", save_all=True, append_images=rgb[1:])
         return buf.getvalue()
@@ -438,10 +489,17 @@ if tool == CORE[0]:
 
         card_start("Files to merge")
         total_pages = 0
+        bad_files   = []
         for i, f in enumerate(files, 1):
             try:
-                r  = make_reader(get_bytes(f))
-                pc = len(r.pages)
+                data = get_bytes(f)
+                check_file_size(data, f.name)
+                info = cached_pdf_info(data)
+                if info["error"]:
+                    raise ValueError(info["error"])
+                if info["encrypted"]:
+                    raise ValueError("password-protected")
+                pc = info["pages"]
                 total_pages += pc
                 st.markdown(
                     f"`{i}.` **{f.name}** &nbsp; "
@@ -449,25 +507,35 @@ if tool == CORE[0]:
                     f'<span class="pill" style="font-size:.72rem">{fmt_bytes(f.size)}</span>',
                     unsafe_allow_html=True,
                 )
-            except Exception:
-                st.markdown(f"`{i}.` **{f.name}** — ⚠️ unreadable")
+            except ValueError as e:
+                bad_files.append(f.name)
+                st.markdown(f"`{i}.` **{f.name}** — ⚠️ {e}")
         pill_row((f"{total_pages} total pages after merge", "s"))
         card_end()
 
-        if len(files) < 2:
+        if bad_files:
+            show_alert("warn", "⚠️", f"Fix the issues above before merging: {', '.join(bad_files)}")
+        elif len(files) < 2:
             show_alert("warn", "⚠️", "Upload at least 2 PDFs.")
         elif st.button("Merge PDFs", key="mb"):
             try:
-                w = PdfWriter()
-                for f in files:
-                    for pg in make_reader(get_bytes(f)).pages:
+                w    = PdfWriter()
+                prog = st.progress(0, text="Merging…")
+                for idx, f in enumerate(files):
+                    reader = validate_pdf(get_bytes(f), f.name)
+                    for pg in reader.pages:
                         w.add_page(pg)
+                    prog.progress((idx + 1) / len(files),
+                                  text=f"Merging {idx+1}/{len(files)}: {f.name}")
+                prog.empty()
                 out = writer_to_bytes(w)
-                st.success(f"✅  Merged {len(files)} files → {len(w.pages)} pages.")
+                st.success(f"✅  Merged {len(files)} files → {len(w.pages)} pages ({fmt_bytes(len(out))}).")
                 st.download_button("⬇️  Download merged.pdf",
                                    out, "merged.pdf", "application/pdf", key="md")
+            except ValueError as e:
+                show_alert("err", "❌", str(e))
             except Exception as e:
-                st.error(f"Merge failed: {e}")
+                st.error(f"Merge failed: {e}\n\n{traceback.format_exc()}")
     else:
         show_alert("info", "ℹ️", "Upload two or more PDFs above to get started.")
 
@@ -479,43 +547,49 @@ elif tool == CORE[1]:
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="su")
     if f:
-        data   = get_bytes(f)
-        reader = make_reader(data)
-        total  = len(reader.pages)
-        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
-        col1, col2 = st.columns(2)
-        with col1:
-            mode = st.selectbox("Split mode",
-                                ["Every page (individual files)", "Fixed chunk size"],
-                                key="sm")
-        with col2:
-            chunk_size = None
-            if mode == "Fixed chunk size":
-                chunk_size = st.number_input("Pages per chunk",
-                                             min_value=1, max_value=total,
-                                             value=min(5, total), key="sc")
+            col1, col2 = st.columns(2)
+            with col1:
+                mode = st.selectbox("Split mode",
+                                    ["Every page (individual files)", "Fixed chunk size"],
+                                    key="sm")
+            with col2:
+                chunk_size = None
+                if mode == "Fixed chunk size":
+                    chunk_size = st.number_input("Pages per chunk",
+                                                 min_value=1, max_value=total,
+                                                 value=min(5, total), key="sc")
 
-        if st.button("Split PDF", key="sb"):
-            try:
+            if st.button("Split PDF", key="sb"):
                 pages_dict: dict = {}
+                prog = st.progress(0, text="Splitting…")
                 if mode == "Every page (individual files)":
                     for i in range(total):
                         pages_dict[f"page_{i+1:04d}.pdf"] = copy_pages(reader, [i])
+                        prog.progress((i + 1) / total, text=f"Page {i+1}/{total}")
                 elif chunk_size is not None:
-                    cs   = int(chunk_size)
-                    part = 1
-                    for start in range(0, total, cs):
+                    cs    = int(chunk_size)
+                    parts = list(range(0, total, cs))
+                    for part_idx, start in enumerate(parts):
                         end = min(start + cs, total)
-                        key = f"part_{part:03d}_pages_{start+1}-{end}.pdf"
+                        key = f"part_{part_idx+1:03d}_pages_{start+1}-{end}.pdf"
                         pages_dict[key] = copy_pages(reader, list(range(start, end)))
-                        part += 1
+                        prog.progress((part_idx + 1) / len(parts),
+                                      text=f"Chunk {part_idx+1}/{len(parts)}")
+                prog.empty()
                 zb = build_zip(pages_dict)
-                st.success(f"✅  {len(pages_dict)} file(s) created.")
-                st.download_button(f"⬇️  Download split_pages.zip ({fmt_bytes(len(zb))})",
+                st.success(f"✅  {len(pages_dict)} file(s) created ({fmt_bytes(len(zb))}).")
+                st.download_button(f"⬇️  Download split_pages.zip",
                                    zb, "split_pages.zip", "application/zip", key="sd")
-            except Exception as e:
-                st.error(f"Split failed: {e}")
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Split failed: {e}\n\n{traceback.format_exc()}")
     else:
         show_alert("info", "ℹ️", "Upload a PDF above to get started.")
 
@@ -527,33 +601,34 @@ elif tool == CORE[2]:
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="rpu")
     if f:
-        data   = get_bytes(f)
-        reader = make_reader(data)
-        total  = len(reader.pages)
-        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
-        pages_input = st.text_input("Pages to remove",
-                                    placeholder=f"e.g.  2, 5, 7-10  (1 to {total})",
-                                    key="rpi")
-        show_alert("info", "ℹ️",
-                   f"Comma-separated page numbers or ranges. Valid: 1–{total}.")
+            pages_input = st.text_input("Pages to remove",
+                                        placeholder=f"e.g.  2, 5, 7-10  (1 to {total})",
+                                        key="rpi")
+            show_alert("info", "ℹ️",
+                       f"Comma-separated page numbers or ranges. Valid: 1–{total}.")
 
-        if pages_input and st.button("Remove Pages", key="rpb"):
-            try:
+            if pages_input and st.button("Remove Pages", key="rpb"):
                 to_remove = set(parse_range(pages_input, total))
                 keep      = [i for i in range(total) if i not in to_remove]
                 if not keep:
                     show_alert("err", "❌", "Cannot remove all pages.")
                 else:
-                    out = copy_pages(reader, keep)
+                    with st.spinner("Removing pages…"):
+                        out = copy_pages(reader, keep)
                     st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
                     st.success(f"✅  Removed {len(to_remove)} page(s) — {len(keep)} remaining.")
                     st.download_button("⬇️  Download result.pdf",
                                        out, "result.pdf", "application/pdf", key="rpd")
-            except ValueError as e:
-                show_alert("err", "❌", str(e))
-            except Exception as e:
-                st.error(f"Error: {e}")
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Error: {e}\n\n{traceback.format_exc()}")
     else:
         show_alert("info", "ℹ️", "Upload a PDF above to get started.")
 
@@ -565,29 +640,30 @@ elif tool == CORE[3]:
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="eu")
     if f:
-        data   = get_bytes(f)
-        reader = make_reader(data)
-        total  = len(reader.pages)
-        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
-        pages_input = st.text_input("Pages to extract",
-                                    placeholder=f"e.g.  1, 3-6, 9  (1 to {total})",
-                                    key="epi")
-        show_alert("info", "ℹ️",
-                   f"Comma-separated page numbers or ranges. Valid: 1–{total}.")
+            pages_input = st.text_input("Pages to extract",
+                                        placeholder=f"e.g.  1, 3-6, 9  (1 to {total})",
+                                        key="epi")
+            show_alert("info", "ℹ️",
+                       f"Comma-separated page numbers or ranges. Valid: 1–{total}.")
 
-        if pages_input and st.button("Extract Pages", key="eb"):
-            try:
+            if pages_input and st.button("Extract Pages", key="eb"):
                 indices = parse_range(pages_input, total)
-                out     = copy_pages(reader, indices)
+                with st.spinner("Extracting…"):
+                    out = copy_pages(reader, indices)
                 st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
                 st.success(f"✅  Extracted {len(indices)} page(s).")
                 st.download_button("⬇️  Download extracted.pdf",
                                    out, "extracted.pdf", "application/pdf", key="ed")
-            except ValueError as e:
-                show_alert("err", "❌", str(e))
-            except Exception as e:
-                st.error(f"Error: {e}")
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Error: {e}\n\n{traceback.format_exc()}")
     else:
         show_alert("info", "ℹ️", "Upload a PDF above to get started.")
 
@@ -599,44 +675,50 @@ elif tool == CORE[4]:
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="rou")
     if f:
-        data   = get_bytes(f)
-        reader = make_reader(data)
-        total  = len(reader.pages)
-        pill_row((f"{total} pages", "a"))
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"))
 
-        example = ", ".join(str(i) for i in range(total, 0, -1))
-        order_input = st.text_input(
-            f"New page order — enter all {total} page number(s) once each",
-            placeholder=f"Reversed example: {example}",
-            key="roi",
-        )
-        show_alert("info", "ℹ️",
-                   f"Enter all {total} page numbers separated by commas in your desired order.")
+            example = ", ".join(str(i) for i in range(total, 0, -1))
+            order_input = st.text_input(
+                f"New page order — enter all {total} page number(s) once each",
+                placeholder=f"Reversed example: {example}",
+                key="roi",
+            )
+            show_alert("info", "ℹ️",
+                       f"Enter all {total} page numbers separated by commas in your desired order.")
 
-        if order_input and st.button("Reorder Pages", key="rob"):
-            try:
-                nums = [int(x.strip()) for x in order_input.split(",") if x.strip()]
-                if len(nums) != total:
-                    show_alert("err", "❌",
-                               f"Got {len(nums)} number(s) but document has {total} pages.")
-                elif sorted(nums) != list(range(1, total + 1)):
-                    from collections import Counter
-                    counts  = Counter(nums)
-                    missing = sorted(set(range(1, total + 1)) - set(nums))
-                    dupes   = sorted(n for n, c in counts.items() if c > 1)
-                    msg = "Invalid order. "
-                    if missing: msg += f"Missing: {missing}. "
-                    if dupes:   msg += f"Duplicates: {dupes}."
-                    show_alert("err", "❌", msg)
-                else:
-                    out = copy_pages(reader, [n - 1 for n in nums])
-                    st.success("✅  Pages reordered.")
-                    st.download_button("⬇️  Download reordered.pdf",
-                                       out, "reordered.pdf", "application/pdf", key="rod")
-            except ValueError:
-                show_alert("err", "❌", "Invalid input — integers only, comma-separated.")
-            except Exception as e:
-                st.error(f"Error: {e}")
+            if order_input and st.button("Reorder Pages", key="rob"):
+                try:
+                    nums = [int(x.strip()) for x in order_input.split(",") if x.strip()]
+                except ValueError:
+                    show_alert("err", "❌", "Invalid input — integers only, comma-separated.")
+                    nums = []
+
+                if nums:
+                    if len(nums) != total:
+                        show_alert("err", "❌",
+                                   f"Got {len(nums)} number(s) but document has {total} pages.")
+                    elif sorted(nums) != list(range(1, total + 1)):
+                        counts  = Counter(nums)
+                        missing = sorted(set(range(1, total + 1)) - set(nums))
+                        dupes   = sorted(n for n, c in counts.items() if c > 1)
+                        msg = "Invalid order. "
+                        if missing: msg += f"Missing: {missing}. "
+                        if dupes:   msg += f"Duplicates: {dupes}."
+                        show_alert("err", "❌", msg)
+                    else:
+                        with st.spinner("Reordering…"):
+                            out = copy_pages(reader, [n - 1 for n in nums])
+                        st.success("✅  Pages reordered.")
+                        st.download_button("⬇️  Download reordered.pdf",
+                                           out, "reordered.pdf", "application/pdf", key="rod")
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Error: {e}\n\n{traceback.format_exc()}")
     else:
         show_alert("info", "ℹ️", "Upload a PDF above to get started.")
 
@@ -671,39 +753,50 @@ elif tool == CORE[5]:
 
         for idx, img_file in enumerate(imgs):
             try:
-                img = Image.open(img_file)
+                raw = get_bytes(img_file)
+                check_file_size(raw, img_file.name)
+                img = Image.open(io.BytesIO(raw))
+                img.verify()                        # catch truncated/corrupt images early
+                img = Image.open(io.BytesIO(raw))   # re-open after verify (verify closes it)
                 pil_images.append(img)
                 with cols[idx % n_cols]:
                     st.image(img, use_container_width=True,
                              caption=f"{idx+1}. {img_file.name[:16]}")
-            except Exception:
-                bad.append(img_file.name)
+            except Exception as exc:
+                bad.append(f"{img_file.name} ({exc})")
         card_end()
 
         if bad:
-            show_alert("warn", "⚠️", f"Could not open: {', '.join(bad)}")
+            show_alert("warn", "⚠️", f"Could not open: {'; '.join(bad)}")
 
         if pil_images and st.button("Convert to PDF", key="i2b"):
             try:
+                prog = st.progress(0, text="Processing images…")
                 if fit == "A4 portrait (white background)":
-                    W, H = 2480, 3508
-                    fitted = []
-                    for img in pil_images:
+                    W, H    = 2480, 3508
+                    fitted  = []
+                    for i, img in enumerate(pil_images):
                         rgb = img.convert("RGB")
                         rgb.thumbnail((W, H), Image.LANCZOS)
                         canvas = Image.new("RGB", (W, H), (255, 255, 255))
                         canvas.paste(rgb, ((W - rgb.width) // 2, (H - rgb.height) // 2))
                         fitted.append(canvas)
+                        prog.progress((i + 1) / len(pil_images),
+                                      text=f"Fitting image {i+1}/{len(pil_images)}")
                     pil_images = fitted
 
                 final = []
-                for img in pil_images:
+                for i, img in enumerate(pil_images):
                     b = io.BytesIO()
                     img.convert("RGB").save(b, "JPEG", quality=quality)
                     b.seek(0)
                     final.append(Image.open(b))
+                    prog.progress((i + 1) / len(pil_images),
+                                  text=f"Encoding image {i+1}/{len(pil_images)}")
 
+                prog.progress(1.0, text="Building PDF…")
                 out = images_to_pdf(final)
+                prog.empty()
                 st.success(f"✅  {len(final)}-page PDF created ({fmt_bytes(len(out))}).")
                 st.download_button("⬇️  Download images.pdf",
                                    out, "images.pdf", "application/pdf", key="i2d")
@@ -723,22 +816,26 @@ elif tool == EXTRA[0]:
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="opu")
     if f:
-        data   = get_bytes(f)
-        reader = make_reader(data)
-        total  = len(reader.pages)
-        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
-        compress_streams = st.checkbox("Compress content streams (recommended)", value=True, key="ocs")
+            compress_streams = st.checkbox("Compress content streams (recommended)", value=True, key="ocs")
 
-        if st.button("Optimize", key="opb"):
-            try:
-                w = PdfWriter()
-                for page in reader.pages:
+            if st.button("Optimize", key="opb"):
+                w    = PdfWriter()
+                prog = st.progress(0, text="Optimizing…")
+                for i, page in enumerate(reader.pages):
                     w.add_page(page)
                     if compress_streams:
                         w.pages[-1].compress_content_streams()
+                    prog.progress((i + 1) / total, text=f"Page {i+1}/{total}")
                 w.compress_identical_objects(remove_identicals=True, remove_orphans=True)
+                prog.progress(1.0, text="Finalizing…")
                 out = writer_to_bytes(w)
+                prog.empty()
                 st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
                 if len(out) < len(data):
                     st.success(f"✅  Saved {fmt_bytes(len(data) - len(out))}.")
@@ -746,8 +843,10 @@ elif tool == EXTRA[0]:
                     st.info("ℹ️  Already well-optimised — no reduction achieved.")
                 st.download_button("⬇️  Download optimized.pdf",
                                    out, "optimized.pdf", "application/pdf", key="opd")
-            except Exception as e:
-                st.error(f"Optimization failed: {e}")
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Optimization failed: {e}\n\n{traceback.format_exc()}")
     else:
         show_alert("info", "ℹ️", "Upload a PDF above to get started.")
 
@@ -762,19 +861,23 @@ elif tool == EXTRA[1]:
 
     f = st.file_uploader("Upload a PDF", type="pdf", key="cpu")
     if f:
-        data   = get_bytes(f)
-        reader = make_reader(data)
-        total  = len(reader.pages)
-        pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
 
-        if st.button("Compress", key="cpb"):
-            try:
-                w = PdfWriter()
-                for page in reader.pages:
+            if st.button("Compress", key="cpb"):
+                w    = PdfWriter()
+                prog = st.progress(0, text="Compressing…")
+                for i, page in enumerate(reader.pages):
                     w.add_page(page)
                     w.pages[-1].compress_content_streams()
+                    prog.progress((i + 1) / total, text=f"Page {i+1}/{total}")
                 w.compress_identical_objects(remove_identicals=True, remove_orphans=True)
+                prog.progress(1.0, text="Finalizing…")
                 out = writer_to_bytes(w)
+                prog.empty()
                 st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
                 if len(out) < len(data):
                     st.success(f"✅  Compressed by {fmt_bytes(len(data) - len(out))}.")
@@ -782,8 +885,10 @@ elif tool == EXTRA[1]:
                     st.info("ℹ️  No further compression achieved. Try Ghostscript.")
                 st.download_button("⬇️  Download compressed.pdf",
                                    out, "compressed.pdf", "application/pdf", key="cpd")
-            except Exception as e:
-                st.error(f"Compression failed: {e}")
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Compression failed: {e}\n\n{traceback.format_exc()}")
     else:
         show_alert("info", "ℹ️", "Upload a PDF above to get started.")
 
@@ -798,31 +903,44 @@ elif tool == EXTRA[2]:
 
     f = st.file_uploader("Upload a damaged PDF", type="pdf", key="rpu2")
     if f:
-        data = get_bytes(f)
-        pill_row((fmt_bytes(len(data)), ""))
+        try:
+            data = get_bytes(f)
+            check_file_size(data, f.name)
+            pill_row((fmt_bytes(len(data)), ""))
 
-        if st.button("Attempt Repair", key="rpb2"):
-            try:
-                reader  = PdfReader(io.BytesIO(data), strict=False)
-                w       = PdfWriter()
-                skipped = 0
-                for page in reader.pages:
-                    try:
-                        w.add_page(page)
-                    except Exception:
-                        skipped += 1
+            if st.button("Attempt Repair", key="rpb2"):
+                try:
+                    reader  = PdfReader(io.BytesIO(data), strict=False)
+                    w       = PdfWriter()
+                    skipped = 0
+                    total_r = len(reader.pages)
+                    prog    = st.progress(0, text="Repairing…")
+                    for i, page in enumerate(reader.pages):
+                        try:
+                            w.add_page(page)
+                        except Exception as page_err:
+                            skipped += 1
+                            st.warning(f"Page {i+1} skipped: {page_err}")
+                        prog.progress((i + 1) / total_r, text=f"Page {i+1}/{total_r}")
+                    prog.empty()
 
-                out = writer_to_bytes(w)
-                st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
-                if skipped:
-                    show_alert("warn", "⚠️",
-                               f"{skipped} page(s) were unrecoverable and skipped.")
-                st.success(f"✅  {len(w.pages)} page(s) recovered.")
-                st.download_button("⬇️  Download repaired.pdf",
-                                   out, "repaired.pdf", "application/pdf", key="rpd2")
-            except Exception as e:
-                show_alert("err", "❌",
-                           f"Could not repair: <code>{e}</code>. "
-                           "File may be too severely damaged.")
+                    if len(w.pages) == 0:
+                        show_alert("err", "❌",
+                                   "No pages could be recovered. The file may be too severely damaged.")
+                    else:
+                        out = writer_to_bytes(w)
+                        st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
+                        if skipped:
+                            show_alert("warn", "⚠️",
+                                       f"{skipped} page(s) were unrecoverable and skipped.")
+                        st.success(f"✅  {len(w.pages)} page(s) recovered.")
+                        st.download_button("⬇️  Download repaired.pdf",
+                                           out, "repaired.pdf", "application/pdf", key="rpd2")
+                except Exception as e:
+                    show_alert("err", "❌",
+                               f"Could not repair: <code>{e}</code>. "
+                               "File may be too severely damaged.")
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
     else:
         show_alert("info", "ℹ️", "Upload a damaged PDF above to get started.")
