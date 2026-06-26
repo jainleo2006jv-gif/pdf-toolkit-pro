@@ -1,5 +1,7 @@
 """
-PDF Toolkit Pro — clean, simple UI redesign
+PDF Toolkit Pro — 17 tools: Merge, Split, Remove, Extract, Reorder, Images→PDF,
+Optimize, Compress, Repair, Rotate, PDF→Images, Watermark, Protect/Unlock,
+Extract Text, Edit Metadata, Add Page Numbers, Crop Pages
 """
 
 import io
@@ -12,6 +14,7 @@ import streamlit as st
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pypdf.errors import PdfReadError, PdfStreamError
+from pypdf.generic import NameObject, NumberObject
 
 # ── Constants ────────────────────────────────────────────────────────────────
 MAX_FILE_MB    = 200
@@ -299,8 +302,6 @@ def ph(icon: str, title: str, desc: str) -> None:
 
 
 def card_start(label: str = "") -> None:
-    # Use a container to scope the card; the opening div is paired with card_end()
-    # by storing content in session state so both tags emit in one markdown block.
     if "_card_label" not in st.session_state:
         st.session_state["_card_label"] = ""
     st.session_state["_card_label"] = label
@@ -310,7 +311,6 @@ def card_start(label: str = "") -> None:
 def card_end() -> None:
     label = st.session_state.get("_card_label", "")
     title_html = f'<p class="card-title">{label}</p>' if label else ""
-    # Emit a single markdown block so the div wrapper is preserved by Streamlit
     st.markdown(f'<div class="card">{title_html}</div>', unsafe_allow_html=True)
 
 
@@ -329,7 +329,6 @@ def get_bytes(uf) -> bytes:
 
 
 def check_file_size(data: bytes, label: str = "File") -> None:
-    """Raise ValueError if data exceeds the per-file cap."""
     if len(data) > MAX_FILE_BYTES:
         raise ValueError(
             f"{label} is {fmt_bytes(len(data))}, which exceeds the "
@@ -339,7 +338,6 @@ def check_file_size(data: bytes, label: str = "File") -> None:
 
 @st.cache_data(show_spinner=False)
 def cached_pdf_info(data: bytes) -> dict:
-    """Cache page count and encryption status so re-uploads don't re-parse."""
     try:
         reader = PdfReader(io.BytesIO(data))
         encrypted = reader.is_encrypted
@@ -360,7 +358,6 @@ def make_reader(data: bytes) -> PdfReader:
 
 
 def validate_pdf(data: bytes, label: str = "File") -> PdfReader:
-    """Size-check, encryption-check, and parse — raises ValueError on any failure."""
     check_file_size(data, label)
     info = cached_pdf_info(data)
     if info["error"]:
@@ -370,6 +367,24 @@ def validate_pdf(data: bytes, label: str = "File") -> PdfReader:
             "This PDF is password-protected. Remove the password before uploading."
         )
     return make_reader(data)
+
+
+def validate_pdf_with_password(data: bytes, label: str = "File", password: str = "") -> PdfReader:
+    """Like validate_pdf but accepts an optional password for encrypted PDFs."""
+    check_file_size(data, label)
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        if reader.is_encrypted:
+            if not password:
+                raise ValueError("This PDF is password-protected. Enter the password below.")
+            result = reader.decrypt(password)
+            if result == 0:
+                raise ValueError("Incorrect password.")
+        return reader
+    except ValueError:
+        raise
+    except (PdfReadError, PdfStreamError) as e:
+        raise ValueError(f"Could not read PDF: {e}") from e
 
 
 def writer_to_bytes(w: PdfWriter) -> bytes:
@@ -441,12 +456,16 @@ def images_to_pdf(images: list) -> bytes:
 CORE  = ["🔀  Merge PDFs", "✂️  Split PDF", "🗑️  Remove Pages",
          "📑  Extract Pages", "↕️  Reorder Pages", "🖼️  Images → PDF"]
 EXTRA = ["⚡  Optimize PDF", "🗜️  Compress PDF", "🔧  Repair PDF"]
+NEW_A = ["🔄  Rotate Pages", "📸  PDF → Images", "💧  Watermark", "🔐  Protect / Unlock"]
+NEW_B = ["📝  Extract Text", "🏷️  Edit Metadata", "🔢  Add Page Numbers", "✂️  Crop Pages"]
+
+ALL_TOOLS = CORE + EXTRA + NEW_A + NEW_B
 
 with st.sidebar:
     st.markdown(
         '<div class="sb-logo">'
         '<h1>📄 PDF Toolkit</h1>'
-        '<span>9 tools · one place</span>'
+        '<span>17 tools · one place</span>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -455,21 +474,35 @@ with st.sidebar:
     st.markdown('<div class="nav-label" style="margin-top:0.4rem">Extras</div>',
                 unsafe_allow_html=True)
     extra_tool = st.radio("extra_nav", EXTRA, label_visibility="collapsed", key="extra_nav")
+    st.markdown('<div class="nav-label" style="margin-top:0.4rem">Transform</div>',
+                unsafe_allow_html=True)
+    new_a_tool = st.radio("new_a_nav", NEW_A, label_visibility="collapsed", key="new_a_nav")
+    st.markdown('<div class="nav-label" style="margin-top:0.4rem">Content</div>',
+                unsafe_allow_html=True)
+    new_b_tool = st.radio("new_b_nav", NEW_B, label_visibility="collapsed", key="new_b_nav")
 
 # Determine the active tool; last-clicked radio wins via session state
 if "active_nav" not in st.session_state:
     st.session_state["active_nav"] = CORE[0]
 
-_prev_core  = st.session_state.get("_prev_core", CORE[0])
+_prev_core  = st.session_state.get("_prev_core",  CORE[0])
 _prev_extra = st.session_state.get("_prev_extra", EXTRA[0])
+_prev_new_a = st.session_state.get("_prev_new_a", NEW_A[0])
+_prev_new_b = st.session_state.get("_prev_new_b", NEW_B[0])
 
 if core_tool != _prev_core:
     st.session_state["active_nav"] = core_tool
 elif extra_tool != _prev_extra:
     st.session_state["active_nav"] = extra_tool
+elif new_a_tool != _prev_new_a:
+    st.session_state["active_nav"] = new_a_tool
+elif new_b_tool != _prev_new_b:
+    st.session_state["active_nav"] = new_b_tool
 
 st.session_state["_prev_core"]  = core_tool
 st.session_state["_prev_extra"] = extra_tool
+st.session_state["_prev_new_a"] = new_a_tool
+st.session_state["_prev_new_b"] = new_b_tool
 tool = st.session_state["active_nav"]
 
 
@@ -756,8 +789,8 @@ elif tool == CORE[5]:
                 raw = get_bytes(img_file)
                 check_file_size(raw, img_file.name)
                 img = Image.open(io.BytesIO(raw))
-                img.verify()                        # catch truncated/corrupt images early
-                img = Image.open(io.BytesIO(raw))   # re-open after verify (verify closes it)
+                img.verify()
+                img = Image.open(io.BytesIO(raw))
                 pil_images.append(img)
                 with cols[idx % n_cols]:
                     st.image(img, use_container_width=True,
@@ -944,3 +977,692 @@ elif tool == EXTRA[2]:
             show_alert("err", "❌", str(e))
     else:
         show_alert("info", "ℹ️", "Upload a damaged PDF above to get started.")
+
+
+# ─── 10 · ROTATE PAGES ───────────────────────────────────────────────────────
+elif tool == NEW_A[0]:
+    ph("🔄", "Rotate Pages",
+       "Rotate all pages or a specific range by 90°, 180°, or 270°.")
+
+    f = st.file_uploader("Upload a PDF", type="pdf", key="rotu")
+    if f:
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+
+            col1, col2 = st.columns(2)
+            with col1:
+                angle = st.selectbox("Rotation angle",
+                                     ["90° clockwise", "180°", "90° counter-clockwise"],
+                                     key="rota")
+            with col2:
+                scope = st.selectbox("Apply to",
+                                     ["All pages", "Specific pages / range"],
+                                     key="rots")
+
+            pages_input = ""
+            if scope == "Specific pages / range":
+                pages_input = st.text_input("Pages to rotate",
+                                            placeholder=f"e.g.  1, 3-6  (1 to {total})",
+                                            key="rotpi")
+                show_alert("info", "ℹ️", f"Comma-separated page numbers or ranges. Valid: 1–{total}.")
+
+            if st.button("Rotate PDF", key="rotb"):
+                angle_map = {
+                    "90° clockwise": 90,
+                    "180°": 180,
+                    "90° counter-clockwise": 270,
+                }
+                deg = angle_map[angle]
+
+                if scope == "Specific pages / range":
+                    if not pages_input:
+                        show_alert("err", "❌", "Enter page numbers to rotate.")
+                        st.stop()
+                    rotate_set = set(parse_range(pages_input, total))
+                else:
+                    rotate_set = set(range(total))
+
+                w    = PdfWriter()
+                prog = st.progress(0, text="Rotating…")
+                for i, page in enumerate(reader.pages):
+                    w.add_page(page)
+                    if i in rotate_set:
+                        w.pages[-1].rotate(deg)
+                    prog.progress((i + 1) / total, text=f"Page {i+1}/{total}")
+                prog.empty()
+                out = writer_to_bytes(w)
+                st.success(f"✅  Rotated {len(rotate_set)} page(s) by {angle}.")
+                st.download_button("⬇️  Download rotated.pdf",
+                                   out, "rotated.pdf", "application/pdf", key="rotd")
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Rotation failed: {e}\n\n{traceback.format_exc()}")
+    else:
+        show_alert("info", "ℹ️", "Upload a PDF above to get started.")
+
+
+# ─── 11 · PDF → IMAGES ───────────────────────────────────────────────────────
+elif tool == NEW_A[1]:
+    ph("📸", "PDF → Images",
+       "Export every page (or a range) as PNG or JPEG images, delivered as a ZIP.")
+    show_alert("warn", "⚠️",
+               "Requires <code>pdf2image</code> and Poppler. "
+               "Install with: <code>pip install pdf2image</code> and <code>apt install poppler-utils</code>.")
+
+    f = st.file_uploader("Upload a PDF", type="pdf", key="p2iu")
+    if f:
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                fmt = st.selectbox("Image format", ["PNG", "JPEG"], key="p2ifmt")
+            with col2:
+                dpi = st.selectbox("DPI / resolution", [72, 96, 150, 200, 300], index=2, key="p2idpi")
+            with col3:
+                scope = st.selectbox("Pages", ["All pages", "Specific range"], key="p2iscope")
+
+            pages_input = ""
+            if scope == "Specific range":
+                pages_input = st.text_input("Pages to export",
+                                            placeholder=f"e.g.  1-5, 8  (1 to {total})",
+                                            key="p2ipi")
+
+            if st.button("Export Images", key="p2ib"):
+                try:
+                    from pdf2image import convert_from_bytes
+                except ImportError:
+                    show_alert("err", "❌",
+                               "pdf2image is not installed. Run: "
+                               "<code>pip install pdf2image</code> and install Poppler.")
+                    st.stop()
+
+                if scope == "Specific range":
+                    if not pages_input:
+                        show_alert("err", "❌", "Enter page numbers to export.")
+                        st.stop()
+                    indices   = parse_range(pages_input, total)
+                    first_p   = indices[0] + 1
+                    last_p    = indices[-1] + 1
+                else:
+                    indices = list(range(total))
+                    first_p, last_p = 1, total
+
+                prog = st.progress(0, text="Rasterising pages…")
+                images = convert_from_bytes(
+                    data,
+                    dpi=dpi,
+                    first_page=first_p,
+                    last_page=last_p,
+                    fmt=fmt.lower(),
+                )
+                # If specific (non-contiguous) range requested, filter further
+                if scope == "Specific range":
+                    needed_offsets = {i - (first_p - 1) for i in indices}
+                    images = [img for k, img in enumerate(images) if k in needed_offsets]
+
+                files_dict = {}
+                ext = "jpg" if fmt == "JPEG" else "png"
+                for k, img in enumerate(images):
+                    page_num = indices[k] + 1
+                    b = io.BytesIO()
+                    save_kw = {"quality": 92} if fmt == "JPEG" else {}
+                    img.save(b, format=fmt, **save_kw)
+                    files_dict[f"page_{page_num:04d}.{ext}"] = b.getvalue()
+                    prog.progress((k + 1) / len(images), text=f"Page {page_num}/{total}")
+
+                prog.empty()
+                zb = build_zip(files_dict)
+                st.success(f"✅  {len(files_dict)} image(s) exported at {dpi} DPI ({fmt_bytes(len(zb))}).")
+                st.download_button("⬇️  Download images.zip",
+                                   zb, "images.zip", "application/zip", key="p2id")
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Export failed: {e}\n\n{traceback.format_exc()}")
+    else:
+        show_alert("info", "ℹ️", "Upload a PDF above to get started.")
+
+
+# ─── 12 · WATERMARK ──────────────────────────────────────────────────────────
+elif tool == NEW_A[2]:
+    ph("💧", "Watermark PDF",
+       "Stamp a text watermark diagonally across every page.")
+
+    f = st.file_uploader("Upload a PDF", type="pdf", key="wmu")
+    if f:
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+
+            col1, col2 = st.columns(2)
+            with col1:
+                wm_text  = st.text_input("Watermark text", value="CONFIDENTIAL", key="wmt")
+            with col2:
+                wm_opacity = st.slider("Opacity", 5, 60, 20, key="wmo",
+                                       help="Lower = more transparent")
+
+            col3, col4 = st.columns(2)
+            with col3:
+                wm_color = st.selectbox("Color",
+                                        ["Gray", "Red", "Blue", "Black"],
+                                        key="wmc")
+            with col4:
+                wm_size = st.selectbox("Font size", [24, 36, 48, 60, 72], index=2, key="wms")
+
+            if wm_text.strip() and st.button("Apply Watermark", key="wmb"):
+                try:
+                    from reportlab.pdfgen import canvas as rl_canvas
+                    from reportlab.lib.colors import Color
+                    import math
+
+                    color_map = {
+                        "Gray":  (0.5, 0.5, 0.5),
+                        "Red":   (0.8, 0.1, 0.1),
+                        "Blue":  (0.1, 0.1, 0.8),
+                        "Black": (0.0, 0.0, 0.0),
+                    }
+                    r, g, b = color_map[wm_color]
+                    alpha   = wm_opacity / 100.0
+
+                    def make_watermark_page(width: float, height: float) -> bytes:
+                        buf = io.BytesIO()
+                        c   = rl_canvas.Canvas(buf, pagesize=(width, height))
+                        c.saveState()
+                        c.setFont("Helvetica-Bold", wm_size)
+                        c.setFillColor(Color(r, g, b, alpha=alpha))
+                        c.translate(width / 2, height / 2)
+                        c.rotate(45)
+                        c.drawCentredString(0, 0, wm_text)
+                        c.restoreState()
+                        c.save()
+                        return buf.getvalue()
+
+                    w    = PdfWriter()
+                    prog = st.progress(0, text="Applying watermark…")
+                    for i, page in enumerate(reader.pages):
+                        box     = page.mediabox
+                        pw, ph  = float(box.width), float(box.height)
+                        wm_pdf  = PdfReader(io.BytesIO(make_watermark_page(pw, ph)))
+                        page.merge_page(wm_pdf.pages[0])
+                        w.add_page(page)
+                        prog.progress((i + 1) / total, text=f"Page {i+1}/{total}")
+
+                    prog.empty()
+                    out = writer_to_bytes(w)
+                    st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
+                    st.success(f"✅  Watermark applied to {total} page(s).")
+                    st.download_button("⬇️  Download watermarked.pdf",
+                                       out, "watermarked.pdf", "application/pdf", key="wmd")
+
+                except ImportError:
+                    show_alert("err", "❌",
+                               "reportlab is not installed. Run: <code>pip install reportlab</code>")
+                except Exception as e:
+                    st.error(f"Watermark failed: {e}\n\n{traceback.format_exc()}")
+            elif not wm_text.strip():
+                show_alert("warn", "⚠️", "Enter watermark text above.")
+
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Error: {e}\n\n{traceback.format_exc()}")
+    else:
+        show_alert("info", "ℹ️", "Upload a PDF above to get started.")
+
+
+# ─── 13 · PROTECT / UNLOCK ───────────────────────────────────────────────────
+elif tool == NEW_A[3]:
+    ph("🔐", "Protect / Unlock PDF",
+       "Add a password to a PDF, or remove one from a PDF you already own.")
+
+    mode = st.radio("Action", ["🔒  Add password protection", "🔓  Remove password"],
+                    horizontal=True, key="pumode")
+
+    if mode == "🔒  Add password protection":
+        show_alert("info", "ℹ️",
+                   "Sets a user (open) password. Recipients need this password to view the file.")
+        f = st.file_uploader("Upload a PDF", type="pdf", key="ppu")
+        if f:
+            try:
+                data   = get_bytes(f)
+                reader = validate_pdf(data, f.name)
+                total  = len(reader.pages)
+                pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    user_pw  = st.text_input("User password (required to open)", type="password", key="ppuw")
+                with col2:
+                    owner_pw = st.text_input("Owner password (optional, for permissions)",
+                                             type="password", key="ppow",
+                                             help="Leave blank to use the same as user password.")
+
+                if user_pw and st.button("Add Password", key="ppb"):
+                    try:
+                        w = PdfWriter()
+                        for page in reader.pages:
+                            w.add_page(page)
+                        eff_owner = owner_pw if owner_pw else user_pw
+                        w.encrypt(user_password=user_pw, owner_password=eff_owner)
+                        out = writer_to_bytes(w)
+                        st.success(f"✅  Password protection added ({fmt_bytes(len(out))}).")
+                        st.download_button("⬇️  Download protected.pdf",
+                                           out, "protected.pdf", "application/pdf", key="ppd")
+                    except Exception as e:
+                        st.error(f"Protection failed: {e}\n\n{traceback.format_exc()}")
+                elif not user_pw:
+                    show_alert("warn", "⚠️", "Enter a user password above.")
+            except ValueError as e:
+                show_alert("err", "❌", str(e))
+            except Exception as e:
+                st.error(f"Error: {e}\n\n{traceback.format_exc()}")
+        else:
+            show_alert("info", "ℹ️", "Upload a PDF above to get started.")
+
+    else:  # Remove password
+        show_alert("warn", "⚠️",
+                   "Only remove passwords from files you own or have permission to unlock.")
+        f = st.file_uploader("Upload a password-protected PDF", type="pdf", key="upu")
+        if f:
+            try:
+                data = get_bytes(f)
+                check_file_size(data, f.name)
+                pill_row((fmt_bytes(len(data)), ""))
+
+                pw = st.text_input("Current password", type="password", key="upw")
+
+                if pw and st.button("Remove Password", key="upb"):
+                    try:
+                        reader = validate_pdf_with_password(data, f.name, pw)
+                        total  = len(reader.pages)
+                        w = PdfWriter()
+                        for page in reader.pages:
+                            w.add_page(page)
+                        out = writer_to_bytes(w)
+                        st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
+                        st.success(f"✅  Password removed — {total} page(s) unlocked.")
+                        st.download_button("⬇️  Download unlocked.pdf",
+                                           out, "unlocked.pdf", "application/pdf", key="upd")
+                    except ValueError as e:
+                        show_alert("err", "❌", str(e))
+                    except Exception as e:
+                        st.error(f"Unlock failed: {e}\n\n{traceback.format_exc()}")
+                elif not pw:
+                    show_alert("info", "ℹ️", "Enter the current password above.")
+            except ValueError as e:
+                show_alert("err", "❌", str(e))
+            except Exception as e:
+                st.error(f"Error: {e}\n\n{traceback.format_exc()}")
+        else:
+            show_alert("info", "ℹ️", "Upload a password-protected PDF above to get started.")
+
+
+# ─── 14 · EXTRACT TEXT ───────────────────────────────────────────────────────
+elif tool == NEW_B[0]:
+    ph("📝", "Extract Text",
+       "Pull all readable text out of a PDF — by page or as a single document.")
+
+    f = st.file_uploader("Upload a PDF", type="pdf", key="xtu")
+    if f:
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+
+            col1, col2 = st.columns(2)
+            with col1:
+                layout = st.selectbox("Output format",
+                                      ["Single document", "One section per page"],
+                                      key="xtlayout")
+            with col2:
+                scope = st.selectbox("Pages", ["All pages", "Specific range"], key="xtscope")
+
+            pages_input = ""
+            if scope == "Specific range":
+                pages_input = st.text_input("Pages to extract",
+                                            placeholder=f"e.g.  1-5, 8  (1 to {total})",
+                                            key="xtpi")
+
+            if st.button("Extract Text", key="xtb"):
+                if scope == "Specific range":
+                    if not pages_input:
+                        show_alert("err", "❌", "Enter page numbers to extract.")
+                        st.stop()
+                    indices = parse_range(pages_input, total)
+                else:
+                    indices = list(range(total))
+
+                prog  = st.progress(0, text="Extracting text…")
+                parts = []
+                empty = 0
+                for k, i in enumerate(indices):
+                    text = reader.pages[i].extract_text() or ""
+                    if not text.strip():
+                        empty += 1
+                    if layout == "One section per page":
+                        parts.append(f"── Page {i+1} {'─'*40}\n{text or '(no text)'}")
+                    else:
+                        parts.append(text)
+                    prog.progress((k + 1) / len(indices), text=f"Page {i+1}/{total}")
+                prog.empty()
+
+                separator = "\n\n" if layout == "Single document" else "\n\n"
+                full_text = separator.join(parts)
+                char_count = len(full_text)
+
+                pill_row(
+                    (f"{len(indices)} pages processed", "a"),
+                    (f"{char_count:,} characters", "s") if char_count > 0 else ("0 characters", "d"),
+                    (f"{empty} page(s) with no text", "w") if empty else ("all pages have text", "s"),
+                )
+
+                if char_count == 0:
+                    show_alert("warn", "⚠️",
+                               "No text found. The PDF may be scanned (image-only). "
+                               "Try OCR software like Tesseract or Adobe Acrobat.")
+                else:
+                    st.text_area("Extracted text", full_text, height=320, key="xtout")
+                    txt_bytes = full_text.encode("utf-8")
+                    st.download_button("⬇️  Download as .txt",
+                                       txt_bytes,
+                                       file_name=f"{f.name.removesuffix('.pdf')}_text.txt",
+                                       mime="text/plain",
+                                       key="xtd")
+
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Text extraction failed: {e}\n\n{traceback.format_exc()}")
+    else:
+        show_alert("info", "ℹ️", "Upload a PDF above to get started.")
+
+
+# ─── 15 · EDIT METADATA ──────────────────────────────────────────────────────
+elif tool == NEW_B[1]:
+    ph("🏷️", "Edit Metadata",
+       "View and update the title, author, subject, keywords, and other document properties.")
+
+    f = st.file_uploader("Upload a PDF", type="pdf", key="mdu")
+    if f:
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+
+            # Read existing metadata
+            meta = reader.metadata or {}
+            def get_meta(key: str) -> str:
+                val = meta.get(key, "") or meta.get(f"/{key.lstrip('/')}", "")
+                return str(val) if val else ""
+
+            st.markdown("#### Current metadata")
+            raw_items = {k: str(v) for k, v in meta.items()} if meta else {}
+            if raw_items:
+                pill_row(*[(f"{k}: {v[:40]}", "") for k, v in list(raw_items.items())[:8]])
+            else:
+                show_alert("info", "ℹ️", "No metadata found in this PDF.")
+
+            st.markdown("#### Edit fields")
+            col1, col2 = st.columns(2)
+            with col1:
+                title    = st.text_input("Title",    value=get_meta("/Title"),    key="mdtitle")
+                author   = st.text_input("Author",   value=get_meta("/Author"),   key="mdauthor")
+                subject  = st.text_input("Subject",  value=get_meta("/Subject"),  key="mdsubject")
+            with col2:
+                keywords = st.text_input("Keywords", value=get_meta("/Keywords"), key="mdkw")
+                creator  = st.text_input("Creator",  value=get_meta("/Creator"),  key="mdcreator")
+                producer = st.text_input("Producer", value=get_meta("/Producer"), key="mdprod")
+
+            strip_dates = st.checkbox("Strip creation/modification timestamps", value=False, key="mdstrip")
+
+            if st.button("Save Metadata", key="mdb"):
+                w = PdfWriter()
+                for page in reader.pages:
+                    w.add_page(page)
+
+                new_meta = {
+                    "/Title":    title,
+                    "/Author":   author,
+                    "/Subject":  subject,
+                    "/Keywords": keywords,
+                    "/Creator":  creator,
+                    "/Producer": producer,
+                }
+                if not strip_dates:
+                    for key in ("/CreationDate", "/ModDate"):
+                        if key in meta:
+                            new_meta[key] = str(meta[key])
+
+                w.add_metadata({k: v for k, v in new_meta.items() if v})
+                out = writer_to_bytes(w)
+                st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
+                st.success("✅  Metadata updated.")
+                st.download_button("⬇️  Download updated.pdf",
+                                   out, "updated.pdf", "application/pdf", key="mdd")
+
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Metadata edit failed: {e}\n\n{traceback.format_exc()}")
+    else:
+        show_alert("info", "ℹ️", "Upload a PDF above to get started.")
+
+
+# ─── 16 · ADD PAGE NUMBERS ───────────────────────────────────────────────────
+elif tool == NEW_B[2]:
+    ph("🔢", "Add Page Numbers",
+       "Stamp page numbers onto every page using reportlab, with full position and style control.")
+
+    f = st.file_uploader("Upload a PDF", type="pdf", key="pnu")
+    if f:
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+            pill_row((f"{total} pages", "a"), (fmt_bytes(len(data)), ""))
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                position = st.selectbox("Position",
+                                        ["Bottom center", "Bottom right", "Bottom left",
+                                         "Top center", "Top right", "Top left"],
+                                        key="pnpos")
+            with col2:
+                start_num = st.number_input("Start numbering at", min_value=1, value=1, key="pnstart")
+            with col3:
+                font_size = st.selectbox("Font size", [8, 10, 11, 12, 14], index=1, key="pnfs")
+
+            col4, col5 = st.columns(2)
+            with col4:
+                fmt_str = st.text_input("Format  (use {n} for number, {t} for total)",
+                                        value="{n}", key="pnfmt",
+                                        help="Examples: {n}, Page {n}, {n} / {t}")
+            with col5:
+                margin = st.number_input("Margin from edge (pt)", min_value=4, max_value=72,
+                                         value=18, key="pnmargin")
+
+            if st.button("Add Page Numbers", key="pnb"):
+                try:
+                    from reportlab.pdfgen import canvas as rl_canvas
+                    from reportlab.lib.colors import black
+
+                    def make_number_overlay(width: float, height: float,
+                                            label: str) -> bytes:
+                        buf = io.BytesIO()
+                        c   = rl_canvas.Canvas(buf, pagesize=(width, height))
+                        c.setFont("Helvetica", font_size)
+                        c.setFillColor(black)
+                        pad = float(margin)
+
+                        pos_map = {
+                            "Bottom center": (width / 2, pad,          "centre"),
+                            "Bottom right":  (width - pad, pad,        "right"),
+                            "Bottom left":   (pad, pad,                 "left"),
+                            "Top center":    (width / 2, height - pad, "centre"),
+                            "Top right":     (width - pad, height - pad,"right"),
+                            "Top left":      (pad, height - pad,        "left"),
+                        }
+                        x, y, align = pos_map[position]
+
+                        if align == "centre":
+                            c.drawCentredString(x, y, label)
+                        elif align == "right":
+                            c.drawRightString(x, y, label)
+                        else:
+                            c.drawString(x, y, label)
+                        c.save()
+                        return buf.getvalue()
+
+                    w    = PdfWriter()
+                    prog = st.progress(0, text="Stamping page numbers…")
+                    for i, page in enumerate(reader.pages):
+                        box    = page.mediabox
+                        pw, ph = float(box.width), float(box.height)
+                        n      = i + int(start_num)
+                        label  = fmt_str.replace("{n}", str(n)).replace("{t}", str(total))
+                        overlay_pdf = PdfReader(io.BytesIO(make_number_overlay(pw, ph, label)))
+                        page.merge_page(overlay_pdf.pages[0])
+                        w.add_page(page)
+                        prog.progress((i + 1) / total, text=f"Page {i+1}/{total}")
+
+                    prog.empty()
+                    out = writer_to_bytes(w)
+                    st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
+                    st.success(f"✅  Page numbers added to {total} page(s).")
+                    st.download_button("⬇️  Download numbered.pdf",
+                                       out, "numbered.pdf", "application/pdf", key="pnd")
+
+                except ImportError:
+                    show_alert("err", "❌",
+                               "reportlab is not installed. Run: <code>pip install reportlab</code>")
+                except Exception as e:
+                    st.error(f"Page numbering failed: {e}\n\n{traceback.format_exc()}")
+
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Error: {e}\n\n{traceback.format_exc()}")
+    else:
+        show_alert("info", "ℹ️", "Upload a PDF above to get started.")
+
+
+# ─── 17 · CROP PAGES ─────────────────────────────────────────────────────────
+elif tool == NEW_B[3]:
+    ph("✂️", "Crop Pages",
+       "Adjust the visible area of every page by setting new margins. "
+       "Uses the PDF crop box — the original content is preserved and recoverable.")
+
+    show_alert("warn", "⚠️",
+               "Crop box changes what's <em>visible</em> — it does not permanently delete content outside "
+               "the crop area. Use Remove Pages if you need to delete entire pages.")
+
+    f = st.file_uploader("Upload a PDF", type="pdf", key="cru")
+    if f:
+        try:
+            data   = get_bytes(f)
+            reader = validate_pdf(data, f.name)
+            total  = len(reader.pages)
+
+            # Sample first page dimensions for reference
+            sample  = reader.pages[0].mediabox
+            pw_pt   = float(sample.width)
+            ph_pt   = float(sample.height)
+            pw_mm   = pw_pt * 25.4 / 72
+            ph_mm   = ph_pt * 25.4 / 72
+
+            pill_row(
+                (f"{total} pages", "a"),
+                (fmt_bytes(len(data)), ""),
+                (f"Page 1: {pw_mm:.0f}×{ph_mm:.0f} mm  ({pw_pt:.0f}×{ph_pt:.0f} pt)", ""),
+            )
+            show_alert("info", "ℹ️",
+                       f"First page is {pw_mm:.0f}×{ph_mm:.0f} mm. "
+                       "Enter margins to remove from each edge (in mm). "
+                       "0 = no crop on that side.")
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                top    = st.number_input("Top (mm)",    min_value=0.0, max_value=ph_mm*0.45, value=0.0, step=1.0, key="crtop")
+            with col2:
+                bottom = st.number_input("Bottom (mm)", min_value=0.0, max_value=ph_mm*0.45, value=0.0, step=1.0, key="crbot")
+            with col3:
+                left   = st.number_input("Left (mm)",   min_value=0.0, max_value=pw_mm*0.45, value=0.0, step=1.0, key="crlft")
+            with col4:
+                right  = st.number_input("Right (mm)",  min_value=0.0, max_value=pw_mm*0.45, value=0.0, step=1.0, key="crrgt")
+
+            scope = st.selectbox("Apply to", ["All pages", "Specific pages / range"], key="crscope")
+            pages_input = ""
+            if scope == "Specific pages / range":
+                pages_input = st.text_input("Pages to crop",
+                                            placeholder=f"e.g.  1, 3-6  (1 to {total})",
+                                            key="crpi")
+
+            def mm_to_pt(mm: float) -> float:
+                return mm * 72 / 25.4
+
+            if st.button("Crop PDF", key="crb"):
+                if top == bottom == left == right == 0:
+                    show_alert("warn", "⚠️", "All margins are 0 — nothing to crop.")
+                    st.stop()
+
+                if scope == "Specific pages / range":
+                    if not pages_input:
+                        show_alert("err", "❌", "Enter page numbers to crop.")
+                        st.stop()
+                    crop_set = set(parse_range(pages_input, total))
+                else:
+                    crop_set = set(range(total))
+
+                t_pt = mm_to_pt(top)
+                b_pt = mm_to_pt(bottom)
+                l_pt = mm_to_pt(left)
+                r_pt = mm_to_pt(right)
+
+                w    = PdfWriter()
+                prog = st.progress(0, text="Cropping…")
+                for i, page in enumerate(reader.pages):
+                    if i in crop_set:
+                        mb   = page.mediabox
+                        x0   = float(mb.left)   + l_pt
+                        y0   = float(mb.bottom) + b_pt
+                        x1   = float(mb.right)  - r_pt
+                        y1   = float(mb.top)    - t_pt
+                        if x1 <= x0 or y1 <= y0:
+                            show_alert("err", "❌",
+                                       f"Page {i+1}: crop margins exceed page size. Reduce values.")
+                            st.stop()
+                        from pypdf.generic import RectangleObject
+                        page.cropbox = RectangleObject((x0, y0, x1, y1))
+                    w.add_page(page)
+                    prog.progress((i + 1) / total, text=f"Page {i+1}/{total}")
+
+                prog.empty()
+                out = writer_to_bytes(w)
+                new_w_mm = (float(reader.pages[0].mediabox.width) - l_pt - r_pt) * 25.4 / 72
+                new_h_mm = (float(reader.pages[0].mediabox.height) - t_pt - b_pt) * 25.4 / 72
+                st.markdown(size_pills(len(data), len(out)), unsafe_allow_html=True)
+                st.success(
+                    f"✅  Cropped {len(crop_set)} page(s). "
+                    f"New visible area: {new_w_mm:.0f}×{new_h_mm:.0f} mm."
+                )
+                st.download_button("⬇️  Download cropped.pdf",
+                                   out, "cropped.pdf", "application/pdf", key="crd")
+
+        except ValueError as e:
+            show_alert("err", "❌", str(e))
+        except Exception as e:
+            st.error(f"Crop failed: {e}\n\n{traceback.format_exc()}")
+    else:
+        show_alert("info", "ℹ️", "Upload a PDF above to get started.")
